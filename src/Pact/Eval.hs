@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -52,6 +53,7 @@ import Unsafe.Coerce
 import Data.Aeson (Value)
 
 import Pact.Types.Runtime
+
 
 evalBeginTx :: Info -> Eval e ()
 evalBeginTx i = beginTx i =<< view eeTxId
@@ -290,7 +292,7 @@ resolveArg :: Info -> [Term n] -> Int -> Term n
 resolveArg ai as i = fromMaybe (appError ai $ pack $ "Missing argument value at index " ++ show i) $
                      as `atMay` i
 
-appCall :: Show t => FunApp -> Info -> [Term t] -> Eval e a -> Eval e a
+appCall :: Show t => FunApp -> Info -> [Term t] -> Eval e (Gas,a) -> Eval e a
 appCall fa ai as = call (StackFrame (_faName fa) ai (Just (fa,map (pack.abbrev) as)))
 
 reduceApp :: Term Ref -> [Term Ref] -> Info ->  Eval e (Term Name)
@@ -304,8 +306,8 @@ reduceApp TDef {..} as ai = do
       fa = FunApp _tInfo _tDefName (Just _tModule) _tDefType (funTypes ft') (_mDocs <$> _tMeta)
   appCall fa ai as $
     case _tDefType of
-      Defun -> reduceBody bod'
-      Defpact -> applyPact bod'
+      Defun -> (GFree,) <$> reduceBody bod' -- TODO app charge
+      Defpact -> (GFree,) <$> applyPact bod' -- TODO pact charge
 reduceApp (TLitString errMsg) _ i = evalError i $ unpack errMsg
 reduceApp r _ ai = evalError ai $ "Expected def: " ++ show r
 

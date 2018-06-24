@@ -514,12 +514,11 @@ runEval' s env act =
               ]) s
 
 
-
 -- | Bracket interpreter action pushing and popping frame on call stack.
-call :: StackFrame -> Eval e a -> Eval e a
+call :: StackFrame -> Eval e (Gas,a) -> Eval e a
 call s act = do
   evalCallStack %= (s:)
-  r <- act
+  (_,r) <- act
   evalCallStack %= \st -> case st of (_:as) -> as; [] -> []
   return r
 {-# INLINE call #-}

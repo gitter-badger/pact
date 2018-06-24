@@ -82,6 +82,7 @@ module Pact.Types.Lang
    tLit,tStr,termEq,abbrev,
    Text,pack,unpack,
    mDocs,mMetas
+    ,Gas(..)
    ) where
 
 
@@ -116,6 +117,7 @@ import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import Text.PrettyPrint.ANSI.Leijen hiding ((<>),(<$>))
 import Data.Monoid
 import Data.Semigroup (Semigroup)
+import qualified Data.Semigroup as Semigroup
 import Control.DeepSeq
 import Data.Maybe
 import qualified Data.HashSet as HS
@@ -622,9 +624,22 @@ instance Show Ref where
     show (Direct t) = abbrev t
     show (Ref t) = abbrev t
 
+
+data Gas = GFree | GValue Decimal
+
+instance Monoid Gas where
+  mempty = GFree
+  a `mappend` b = case (a,b) of
+    (GFree,GFree) -> GFree
+    (GFree,_) -> b
+    (_,GFree) -> a
+    (GValue x,GValue y) -> GValue $ x + y
+instance Semigroup Gas where
+  a <> b = a `mappend` b
+
 data NativeDFun = NativeDFun {
       _nativeName :: NativeDefName,
-      _nativeFun :: forall m . Monad m => FunApp -> [Term Ref] -> m (Term Name)
+      _nativeFun :: forall m . Monad m => FunApp -> [Term Ref] -> m (Gas,Term Name)
     }
 instance Eq NativeDFun where a == b = _nativeName a == _nativeName b
 instance Show NativeDFun where show a = show $ _nativeName a

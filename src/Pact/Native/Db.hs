@@ -115,30 +115,32 @@ dbDefs =
     ])
 
 descTable :: RNativeFun e
-descTable _ [TTable {..}] = return $ toTObject TyAny def [
+descTable i as@[TTable {..}] = gas' i as $ return $ toTObject TyAny def [
   (tStr "name",tStr $ asString _tTableName),
   (tStr "module", tStr $ asString _tModule),
   (tStr "type", toTerm $ pack $ show _tTableType)]
 descTable i as = argsError i as
 
 descKeySet :: RNativeFun e
-descKeySet i [TLitString t] = do
+descKeySet i as@[TLitString t] = do
+  g <- gas i as
   r <- readRow (_faInfo i) KeySets (KeySetName t)
   case r of
-    Just v -> return (toTerm (toJSON v))
+    Just v -> return (g,toTerm (toJSON v))
     Nothing -> evalError' i $ "Keyset not found: " ++ show t
 descKeySet i as = argsError i as
 
 descModule :: RNativeFun e
-descModule i [TLitString t] = do
+descModule i as@[TLitString t] = do
+  g <- gas i as
   mods <- view (eeRefStore.rsModules.at (ModuleName t))
   case mods of
     Just (Module{..},_) ->
-      return $ TObject [(tStr "name",tStr $ asString _mName),
-                        (tStr "hash", tStr $ asString _mHash),
-                        (tStr "keyset", tStr $ asString _mKeySet),
-                        (tStr "blessed", toTList tTyString def (map (tStr . asString) (HS.toList _mBlessed))),
-                        (tStr "code", tStr $ asString _mCode)] TyAny def
+      return $ (g,TObject [(tStr "name",tStr $ asString _mName),
+                           (tStr "hash", tStr $ asString _mHash),
+                           (tStr "keyset", tStr $ asString _mKeySet),
+                           (tStr "blessed", toTList tTyString def (map (tStr . asString) (HS.toList _mBlessed))),
+                           (tStr "code", tStr $ asString _mCode)] TyAny def)
     Nothing -> evalError' i $ "Module not found: " ++ show t
 descModule i as = argsError i as
 
@@ -158,11 +160,14 @@ read' i as@(table@TTable {}:TLitString key:rest) = do
     [] -> return []
     [l] -> colsToList (argsError i as) l
     _ -> argsError i as
+  g0 <- gas i as
   guardTable i table
   mrow <- readRow (_faInfo i) (userTable table) (RowKey key)
   case mrow of
     Nothing -> failTx (_faInfo i) $ "read: row not found: " ++ show key
-    Just cs -> case cols of
+    Just cs -> do
+      g <- (g0 <>) <$> gasSpecial (GPostRead cs)
+      fmap (g,) $ case cols of
         [] -> return $ columnsToObject (_tTableType table) cs
         _ -> columnsToObject' (_tTableType table) cols cs
 
@@ -191,20 +196,22 @@ select i as@[tbl',app] = reduce tbl' >>= select' i as Nothing app
 select i as = argsError' i as
 
 select' :: FunApp -> [Term Ref] -> Maybe [(Info,ColumnId)] ->
-           Term Ref -> Term Name -> Eval e (Term Name)
+           Term Ref -> Term Name -> Eval e (Gas,Term Name)
 select' i _ cols' app@TApp{} tbl@TTable{} = do
+    g0 <- gasSpecial $ GSelect cols' app tbl
     guardTable i tbl
     let fi = _faInfo i
         tblTy = _tTableType tbl
     ks <- keys fi (userTable' tbl)
-    fmap (\b -> TList (reverse b) tblTy def) $ (\f -> foldM f [] ks) $ \rs k -> do
+    fmap (second (\b -> TList (reverse b) tblTy def)) $ (\f -> foldM f (g0,[]) ks) $ \(gPrev,rs) k -> do
       mrow <- readRow fi (userTable tbl) k
       case mrow of
         Nothing -> evalError fi $ "select: unexpected error, key not found in select: " ++ show k ++ ", table: " ++ show tbl
         Just row -> do
+          g <- (gPrev <>) <$> gasSpecial (GPostRead row)
           let obj = columnsToObject tblTy row
           result <- apply' app [obj]
-          case result of
+          fmap (g,) $ case result of
             (TLiteral (LBool include) _)
               | include -> case cols' of
                   Nothing -> return (obj:rs)
@@ -218,12 +225,13 @@ withDefaultRead :: NativeFun e
 withDefaultRead fi as@[table',key',defaultRow',b@(TBinding ps bd (BindSchema _) _)] = do
   !tkd <- (,,) <$> reduce table' <*> reduce key' <*> reduce defaultRow'
   case tkd of
-    (table@TTable {..},TLitString key,TObject defaultRow _ _) -> do
+    (table@TTable {..},ka@(TLitString key),ra@(TObject defaultRow _ _)) -> do
+      g0 <- gas fi [table,ka,ra]
       guardTable fi table
       mrow <- readRow (_faInfo fi) (userTable table) (RowKey key)
       case mrow of
-        Nothing -> bindToRow ps bd b =<< toColumns fi defaultRow
-        (Just row) -> bindToRow ps bd b row
+        Nothing -> (g0,) <$> (bindToRow ps bd b =<< toColumns fi defaultRow)
+        (Just row) -> bindToRow ps bd b row g0
     _ -> argsError' fi as
 withDefaultRead fi as = argsError' fi as
 
@@ -231,18 +239,22 @@ withRead :: NativeFun e
 withRead fi as@[table',key',b@(TBinding ps bd (BindSchema _) _)] = do
   !tk <- (,) <$> reduce table' <*> reduce key'
   case tk of
-    (table@TTable {..},TLitString key) -> do
+    (table@TTable {..},ka@(TLitString key)) -> do
+      g0 <- gas fi [table,ka]
       guardTable fi table
       mrow <- readRow (_faInfo fi) (userTable table) (RowKey key)
       case mrow of
         Nothing -> failTx (_faInfo fi) $ "with-read: row not found: " ++ show key
-        (Just row) -> bindToRow ps bd b row
+        (Just row) -> bindToRow ps bd b row g0
     _ -> argsError' fi as
 withRead fi as = argsError' fi as
 
 bindToRow :: [(Arg (Term Ref),Term Ref)] ->
-             Scope Int Term Ref -> Term Ref -> Columns Persistable -> Eval e (Term Name)
-bindToRow ps bd b (Columns row) = bindReduce ps bd (_tInfo b) (\s -> toTerm <$> M.lookup (ColumnId s) row)
+             Scope Int Term Ref -> Term Ref -> Columns Persistable ->
+             Gas -> Eval e (Gas,Term Name)
+bindToRow ps bd b ra@(Columns row) g0 = do
+  g <- (g0 <>) <$> gasSpecial (GPostRead ra)
+  (g,) <$> bindReduce ps bd (_tInfo b) (\s -> toTerm <$> M.lookup (ColumnId s) row)
 
 keys' :: RNativeFun e
 keys' i [table@TTable {..}] = do

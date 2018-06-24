@@ -35,11 +35,15 @@ isSpecialForm = (`M.lookup` sfLookup)
 
 
 -- | Native function with un-reduced arguments. Must fire call stack.
-type NativeFun e = FunApp -> [Term Ref] -> Eval e (Term Name)
+type NativeFun e = FunApp -> [Term Ref] -> Eval e (Gas,Term Name)
 
 -- | Native function with pre-reduced arguments, call stack fired.
-type RNativeFun e = FunApp -> [Term Name] -> Eval e (Term Name)
+type RNativeFun e = FunApp -> [Term Name] -> Eval e (Gas,Term Name)
 
 
 type NativeDef = (NativeDefName,Term Name)
 type NativeModule = (ModuleName,[NativeDef])
+
+data GasSpecial =
+  GPostRead (Columns Persistable) |
+  GSelect (Maybe [(Info,ColumnId)]) (Term Ref) (Term Name)

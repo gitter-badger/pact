@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -24,6 +25,7 @@ module Pact.Native.Internal
   ,module Pact.Types.Native
   ,tTyInteger,tTyDecimal,tTyTime,tTyBool,tTyString,tTyValue,tTyKeySet,tTyObject
   ,colsToList
+  ,gas,gas',gasSpecial
   ) where
 
 import Control.Monad
@@ -73,7 +75,8 @@ bindReduce ps bd bi lkpFun = do
                                 Just v -> return v
             t -> evalError bi $ "Invalid column identifier in binding: " ++ show t
   let bd'' = instantiate (resolveArg bi (map snd vs)) bd
-  call (StackFrame (pack $ "(bind: " ++ show (map (second abbrev) vs) ++ ")") bi Nothing) $! reduceBody bd''
+  call (StackFrame (pack $ "(bind: " ++ show (map (second abbrev) vs) ++ ")") bi Nothing) $!
+    ((GFree,) <$> reduceBody bd'') -- TODO bind charge
 
 
 defNative :: NativeDefName -> NativeFun e -> FunTypes (Term Name) -> Text -> NativeDef
@@ -113,3 +116,13 @@ tTyString :: Type n; tTyString = TyPrim TyString
 tTyValue :: Type n; tTyValue = TyPrim TyValue
 tTyKeySet :: Type n; tTyKeySet = TyPrim TyKeySet
 tTyObject :: Type n -> Type n; tTyObject o = TySchema TyObject o
+
+
+gas :: FunApp -> [Term Name] -> Eval e Gas
+gas _ _ = return GFree
+
+gas' :: FunApp -> [Term Name] -> Eval e a -> Eval e (Gas,a)
+gas' fa args action = gas fa args >>= \g -> (g,) <$> action
+
+gasSpecial :: GasSpecial -> Eval e Gas
+gasSpecial _ = return GFree
