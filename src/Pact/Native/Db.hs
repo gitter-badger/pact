@@ -122,25 +122,23 @@ descTable i as@[TTable {..}] = gas' i as $ return $ toTObject TyAny def [
 descTable i as = argsError i as
 
 descKeySet :: RNativeFun e
-descKeySet i as@[TLitString t] = do
-  g <- gas i as
+descKeySet i as@[TLitString t] = gas' i as $ do
   r <- readRow (_faInfo i) KeySets (KeySetName t)
   case r of
-    Just v -> return (g,toTerm (toJSON v))
+    Just v -> return $ toTerm (toJSON v)
     Nothing -> evalError' i $ "Keyset not found: " ++ show t
 descKeySet i as = argsError i as
 
 descModule :: RNativeFun e
-descModule i as@[TLitString t] = do
-  g <- gas i as
+descModule i as@[TLitString t] = gas' i as $ do
   mods <- view (eeRefStore.rsModules.at (ModuleName t))
   case mods of
     Just (Module{..},_) ->
-      return $ (g,TObject [(tStr "name",tStr $ asString _mName),
-                           (tStr "hash", tStr $ asString _mHash),
-                           (tStr "keyset", tStr $ asString _mKeySet),
-                           (tStr "blessed", toTList tTyString def (map (tStr . asString) (HS.toList _mBlessed))),
-                           (tStr "code", tStr $ asString _mCode)] TyAny def)
+      return $ TObject [(tStr "name",tStr $ asString _mName),
+                         (tStr "hash", tStr $ asString _mHash),
+                         (tStr "keyset", tStr $ asString _mKeySet),
+                         (tStr "blessed", toTList tTyString def (map (tStr . asString) (HS.toList _mBlessed))),
+                         (tStr "code", tStr $ asString _mCode)] TyAny def
     Nothing -> evalError' i $ "Module not found: " ++ show t
 descModule i as = argsError i as
 
@@ -166,12 +164,25 @@ read' i as@(table@TTable {}:TLitString key:rest) = do
   case mrow of
     Nothing -> failTx (_faInfo i) $ "read: row not found: " ++ show key
     Just cs -> do
-      g <- (g0 <>) <$> gasSpecial (GPostRead cs)
+      g <- gasPostRead i g0 cs
       fmap (g,) $ case cols of
         [] -> return $ columnsToObject (_tTableType table) cs
         _ -> columnsToObject' (_tTableType table) cols cs
 
 read' i as = argsError i as
+
+gasPostRead :: Readable r =>FunApp -> Gas -> r -> Eval e Gas
+gasPostRead i g0 row = (g0 <>) <$> gasSpecial i (GPostRead $ readable row)
+
+gasPostRead' :: Readable r => FunApp -> Gas -> r -> Eval e a -> Eval e (Gas,a)
+gasPostRead' i g0 row action = gasPostRead i g0 row >>= \g -> (g,) <$> action
+
+-- | TODO improve post-streaming
+gasPostReads :: Readable r => FunApp -> (Eval e Gas) -> ([r] -> a) -> Eval e [r] -> Eval e (Gas,a)
+gasPostReads i gasCalc postProcess action = do
+  g0 <- gasCalc
+  rs <- action
+  (,postProcess rs) <$> foldM (gasPostRead i) g0 rs
 
 columnsToObject :: ToTerm a => Type (Term n) -> Columns a -> Term n
 columnsToObject ty = (\ps -> TObject ps ty def) . map (toTerm *** toTerm) . M.toList . _columns
@@ -198,7 +209,7 @@ select i as = argsError' i as
 select' :: FunApp -> [Term Ref] -> Maybe [(Info,ColumnId)] ->
            Term Ref -> Term Name -> Eval e (Gas,Term Name)
 select' i _ cols' app@TApp{} tbl@TTable{} = do
-    g0 <- gasSpecial $ GSelect cols' app tbl
+    g0 <- gasSpecial i $ GSelect cols' app tbl
     guardTable i tbl
     let fi = _faInfo i
         tblTy = _tTableType tbl
@@ -208,7 +219,7 @@ select' i _ cols' app@TApp{} tbl@TTable{} = do
       case mrow of
         Nothing -> evalError fi $ "select: unexpected error, key not found in select: " ++ show k ++ ", table: " ++ show tbl
         Just row -> do
-          g <- (gPrev <>) <$> gasSpecial (GPostRead row)
+          g <- gasPostRead i gPrev row
           let obj = columnsToObject tblTy row
           result <- apply' app [obj]
           fmap (g,) $ case result of
@@ -231,7 +242,7 @@ withDefaultRead fi as@[table',key',defaultRow',b@(TBinding ps bd (BindSchema _) 
       mrow <- readRow (_faInfo fi) (userTable table) (RowKey key)
       case mrow of
         Nothing -> (g0,) <$> (bindToRow ps bd b =<< toColumns fi defaultRow)
-        (Just row) -> bindToRow ps bd b row g0
+        (Just row) -> gasPostRead' fi g0 row $ bindToRow ps bd b row
     _ -> argsError' fi as
 withDefaultRead fi as = argsError' fi as
 
@@ -245,49 +256,56 @@ withRead fi as@[table',key',b@(TBinding ps bd (BindSchema _) _)] = do
       mrow <- readRow (_faInfo fi) (userTable table) (RowKey key)
       case mrow of
         Nothing -> failTx (_faInfo fi) $ "with-read: row not found: " ++ show key
-        (Just row) -> bindToRow ps bd b row g0
+        (Just row) -> gasPostRead' fi g0 row $ bindToRow ps bd b row
     _ -> argsError' fi as
 withRead fi as = argsError' fi as
 
 bindToRow :: [(Arg (Term Ref),Term Ref)] ->
-             Scope Int Term Ref -> Term Ref -> Columns Persistable ->
-             Gas -> Eval e (Gas,Term Name)
-bindToRow ps bd b ra@(Columns row) g0 = do
-  g <- (g0 <>) <$> gasSpecial (GPostRead ra)
-  (g,) <$> bindReduce ps bd (_tInfo b) (\s -> toTerm <$> M.lookup (ColumnId s) row)
+             Scope Int Term Ref -> Term Ref -> Columns Persistable -> Eval e (Term Name)
+bindToRow ps bd b (Columns row) = do
+  bindReduce ps bd (_tInfo b) (\s -> toTerm <$> M.lookup (ColumnId s) row)
 
 keys' :: RNativeFun e
-keys' i [table@TTable {..}] = do
-    guardTable i table
-    (\b -> TList b tTyString def) . map toTerm <$> keys (_faInfo i) (userTable' table)
+keys' i as@[table@TTable {..}] =
+  gasPostReads i (gas i as)
+    ((\b -> TList b tTyString def) . map toTerm) $ do
+      guardTable i table
+      keys (_faInfo i) (userTable' table)
 keys' i as = argsError i as
 
 
 txids' :: RNativeFun e
-txids' i [table@TTable {..},TLitInteger key] = do
-  guardTable i table
-  (\b -> TList b tTyInteger def) . map toTerm <$> txids (_faInfo i) (userTable' table) (fromIntegral key)
+txids' i as@[table@TTable {..},TLitInteger key] =
+  gasPostReads i (gas i as)
+    ((\b -> TList b tTyInteger def) . map toTerm) $ do
+      guardTable i table
+      txids (_faInfo i) (userTable' table) (fromIntegral key)
 txids' i as = argsError i as
 
 txlog :: RNativeFun e
-txlog i [table@TTable {..},TLitInteger tid] = do
-  guardTable i table
-  (`TValue` def) . toJSON . over (traverse . txValue) (columnsToObject _tTableType) <$>
-    getTxLog (_faInfo i) (userTable table) (fromIntegral tid)
+txlog i as@[table@TTable {..},TLitInteger tid] =
+  gasPostReads i (gas i as)
+    ((`TValue` def) . toJSON . over (traverse . txValue) (columnsToObject _tTableType)) $ do
+      guardTable i table
+      getTxLog (_faInfo i) (userTable table) (fromIntegral tid)
 txlog i as = argsError i as
 
 keylog :: RNativeFun e
-keylog i [table@TTable {..},TLitString key,TLitInteger utid] = do
-  guardTable i table
-  tids <- txids (_faInfo i) (userTable' table) (fromIntegral utid)
-  logs <- fmap concat $ forM tids $ \tid -> fmap (map (tid,)) $ getTxLog (_faInfo i) (userTable table) (fromIntegral tid)
-  let toTxidObj (t,r) = toTObject TyAny def [(tStr "txid", toTerm t),(tStr "value",columnsToObject _tTableType (_txValue r))]
-  return $ toTList tTyValue def $ map toTxidObj $ (`filter` logs) $ \(_,TxLog {..}) -> _txKey == key
+keylog i as@[table@TTable {..},TLitString key,TLitInteger utid] = do
+  let postProc = toTList tTyValue def . map toTxidObj
+        where toTxidObj (t,r) =
+                toTObject TyAny def [(tStr "txid", toTerm t),(tStr "value",columnsToObject _tTableType (_txValue r))]
+  gasPostReads i (gas i as) postProc $ do
+    guardTable i table
+    tids <- txids (_faInfo i) (userTable' table) (fromIntegral utid)
+    logs <- fmap concat $ forM tids $ \tid -> fmap (map (tid,)) $ getTxLog (_faInfo i) (userTable table) (fromIntegral tid)
+    return $ filter (\(_,TxLog {..}) -> _txKey == key) logs
+
 keylog i as = argsError i as
 
 
 write :: WriteType -> RNativeFun e
-write wt i [table@TTable {..},TLitString key,TObject ps _ _] = do
+write wt i as@[table@TTable {..},TLitString key,TObject ps _ _] = gas' i as $ do
   guardTable i table
   case _tTableType of
     TyAny -> return ()
@@ -303,7 +321,7 @@ toColumns i = fmap (Columns . M.fromList) . mapM conv where
 
 
 createTable' :: RNativeFun e
-createTable' i [t@TTable {..}] = do
+createTable' i as@[t@TTable {..}] = gas' i as $ do
   guardTable i t
   m <- getModule (_faInfo i) _tModule
   let (UserTables tn) = userTable t

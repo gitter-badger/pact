@@ -117,12 +117,14 @@ tTyValue :: Type n; tTyValue = TyPrim TyValue
 tTyKeySet :: Type n; tTyKeySet = TyPrim TyKeySet
 tTyObject :: Type n -> Type n; tTyObject o = TySchema TyObject o
 
-
+-- | Compute "simple gas" (based on name and args only) for some application.
 gas :: FunApp -> [Term Name] -> Eval e Gas
 gas _ _ = return GFree
 
+-- | Precompute "simple gas" (see 'gas') before evaluating some action.
 gas' :: FunApp -> [Term Name] -> Eval e a -> Eval e (Gas,a)
 gas' fa args action = gas fa args >>= \g -> (g,) <$> action
 
-gasSpecial :: GasSpecial -> Eval e Gas
-gasSpecial _ = return GFree
+-- | Compute gas for special cases.
+gasSpecial :: FunApp -> GasSpecial -> Eval e Gas
+gasSpecial _ _ = return GFree

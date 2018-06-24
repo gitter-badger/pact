@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 module Pact.Types.Native where
 
@@ -44,6 +45,27 @@ type RNativeFun e = FunApp -> [Term Name] -> Eval e (Gas,Term Name)
 type NativeDef = (NativeDefName,Term Name)
 type NativeModule = (ModuleName,[NativeDef])
 
+data ReadValue =
+  ReadRow (Columns Persistable) |
+  ReadKey RowKey |
+  ReadTxId TxId |
+  ReadTxLog (TxLog (Columns Persistable)) |
+  ReadKeyLog (TxId, TxLog (Columns Persistable))
+
+class Readable a where
+  readable :: a -> ReadValue
+
+instance Readable (Columns Persistable) where
+  readable = ReadRow
+instance Readable RowKey where
+  readable = ReadKey
+instance Readable TxId where
+  readable = ReadTxId
+instance Readable (TxLog (Columns Persistable)) where
+  readable = ReadTxLog
+instance Readable (TxId, TxLog (Columns Persistable)) where
+  readable = ReadKeyLog
+
 data GasSpecial =
-  GPostRead (Columns Persistable) |
+  GPostRead ReadValue |
   GSelect (Maybe [(Info,ColumnId)]) (Term Ref) (Term Name)
