@@ -18,14 +18,14 @@ module Pact.Native.Internal
   (success
   ,parseMsgKey
   ,bindReduce
-  ,defNative,defRNative
+  ,defNative,defGasRNative,defRNative
   ,foldDefs
   ,funType,funType'
   ,getModule
   ,module Pact.Types.Native
   ,tTyInteger,tTyDecimal,tTyTime,tTyBool,tTyString,tTyValue,tTyKeySet,tTyObject
   ,colsToList
-  ,gas,gas',gasSpecial
+  ,gas,gas',gasSpecial,gasSpecial',preGas,gasUnreduced,gasUnreduced'
   ) where
 
 import Control.Monad
@@ -82,9 +82,13 @@ bindReduce ps bd bi lkpFun = do
 defNative :: NativeDefName -> NativeFun e -> FunTypes (Term Name) -> Text -> NativeDef
 defNative n fun ftype docs = (n, TNative n (NativeDFun n (unsafeCoerce fun)) ftype docs def)
 
+defGasRNative :: NativeDefName -> GasRNativeFun e -> FunTypes (Term Name) -> Text -> NativeDef
+defGasRNative name fun = defNative name (reduced fun)
+    where reduced f fi as = preGas fi as >>= \(as',g) -> f g fi as'
+
 defRNative :: NativeDefName -> RNativeFun e -> FunTypes (Term Name) -> Text -> NativeDef
 defRNative name fun = defNative name (reduced fun)
-    where reduced f fi as = mapM reduce as >>= \as' -> f fi as'
+    where reduced f fi as = preGas fi as >>= \(as',g) -> (g,) <$> f fi as'
 
 foldDefs :: Monad m => [m a] -> m [a]
 foldDefs = foldM (\r d -> d >>= \d' -> return (d':r)) []
@@ -117,9 +121,9 @@ tTyValue :: Type n; tTyValue = TyPrim TyValue
 tTyKeySet :: Type n; tTyKeySet = TyPrim TyKeySet
 tTyObject :: Type n -> Type n; tTyObject o = TySchema TyObject o
 
--- | Compute "simple gas" (based on name and args only) for some application.
+-- | Compute "simple gas" (with reduced args) for some application.
 gas :: FunApp -> [Term Name] -> Eval e Gas
-gas _ _ = return GFree
+gas _ _ = return GFree -- TODO
 
 -- | Precompute "simple gas" (see 'gas') before evaluating some action.
 gas' :: FunApp -> [Term Name] -> Eval e a -> Eval e (Gas,a)
@@ -127,4 +131,18 @@ gas' fa args action = gas fa args >>= \g -> (g,) <$> action
 
 -- | Compute gas for special cases.
 gasSpecial :: FunApp -> GasSpecial -> Eval e Gas
-gasSpecial _ _ = return GFree
+gasSpecial _ _ = return GFree -- TODO
+
+gasUnreduced :: FunApp -> [Term Ref] -> Eval e a -> Eval e (Gas,a)
+gasUnreduced i as = gasSpecial' i (GUnreduced as)
+
+gasUnreduced' :: FunApp -> [Term Ref] -> ([Term Name] -> Eval e a) -> Eval e (Gas,a)
+gasUnreduced' i as f = gasSpecial' i (GUnreduced as) $ mapM reduce as >>= f
+
+-- | Precompute special gas (see 'specialGas') before evaluating some action.
+gasSpecial' :: FunApp -> GasSpecial -> Eval e a -> Eval e (Gas,a)
+gasSpecial' i gs action = gasSpecial i gs >>= \g -> (g,) <$> action
+
+-- | Precompute gas on unreduced args returning reduced values.
+preGas :: FunApp -> [Term Ref] -> Eval e ([Term Name],Gas)
+preGas i as = mapM reduce as >>= \as' -> (as',) <$> gas i as' -- TODO

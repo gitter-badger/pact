@@ -38,19 +38,22 @@ isSpecialForm = (`M.lookup` sfLookup)
 -- | Native function with un-reduced arguments. Must fire call stack.
 type NativeFun e = FunApp -> [Term Ref] -> Eval e (Gas,Term Name)
 
--- | Native function with pre-reduced arguments, call stack fired.
-type RNativeFun e = FunApp -> [Term Name] -> Eval e (Gas,Term Name)
+-- | Native function with eager gas compute providing pre-reduced arguments, call stack fired.
+type GasRNativeFun e = Gas -> FunApp -> [Term Name] -> Eval e (Gas,Term Name)
 
+-- | Native function with "pure" eager gas (ie no need to further compute gas)
+-- providing pre-reduced arguments, call stack fired.
+type RNativeFun e = FunApp -> [Term Name] -> Eval e (Term Name)
 
 type NativeDef = (NativeDefName,Term Name)
 type NativeModule = (ModuleName,[NativeDef])
 
-data ReadValue =
-  ReadRow (Columns Persistable) |
-  ReadKey RowKey |
-  ReadTxId TxId |
-  ReadTxLog (TxLog (Columns Persistable)) |
-  ReadKeyLog (TxId, TxLog (Columns Persistable))
+data ReadValue
+  = ReadRow (Columns Persistable)
+  | ReadKey RowKey
+  | ReadTxId TxId
+  | ReadTxLog (TxLog (Columns Persistable))
+  | ReadKeyLog (TxId, TxLog (Columns Persistable))
 
 class Readable a where
   readable :: a -> ReadValue
@@ -66,6 +69,7 @@ instance Readable (TxLog (Columns Persistable)) where
 instance Readable (TxId, TxLog (Columns Persistable)) where
   readable = ReadKeyLog
 
-data GasSpecial =
-  GPostRead ReadValue |
-  GSelect (Maybe [(Info,ColumnId)]) (Term Ref) (Term Name)
+data GasSpecial
+  = GPostRead ReadValue
+  | GSelect (Maybe [(Info,ColumnId)]) (Term Ref) (Term Name)
+  | GUnreduced [Term Ref]

@@ -37,7 +37,7 @@ keyDefs =
      "Define keyset as NAME with KEYSET. \
      \If keyset NAME already exists, keyset will be enforced before updating to new value.\
      \`$(define-keyset 'admin-keyset (read-keyset \"keyset\"))`"
-    ,defNative "enforce-keyset" enforceKeyset' (funType tTyBool [("keyset-or-name",mkTyVar "k" [tTyString,tTyKeySet])])
+    ,defRNative "enforce-keyset" enforceKeyset' (funType tTyBool [("keyset-or-name",mkTyVar "k" [tTyString,tTyKeySet])])
      "Special form to enforce KEYSET-OR-NAME against message keys before running BODY. \
      \KEYSET-OR-NAME can be a symbol of a keyset name or a keyset object. \
      \`$(with-keyset 'admin-keyset ...)` `$(with-keyset (read-keyset \"keyset\") ...)`"
@@ -67,9 +67,8 @@ defineKeyset fi [TLitString name,TKeySet ks _] = do
 defineKeyset i as = argsError i as
 
 
-enforceKeyset' :: NativeFun e
-enforceKeyset' i [k] = do
-  t <- reduce k
+enforceKeyset' :: RNativeFun e
+enforceKeyset' i [t] = do
   (ksn,ks) <- case t of
     TLitString name -> do
       let ksn = KeySetName name
