@@ -379,7 +379,7 @@ readInteger i [TLitString key] = do
 readInteger i as = argsError i as
 
 enforce :: NativeFun e
-enforce i as = runPure $ gasUnreduced' i as $ enforce' i
+enforce i as = runPure $ gasUnreduced i as $ mapM reduce as >>= enforce' i
 
 enforceOne :: NativeFun e
 enforceOne i as@[msg,TList conds _ _] = runPureSys (_faInfo i) $ gasUnreduced i as $ do

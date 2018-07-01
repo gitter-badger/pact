@@ -37,6 +37,7 @@ import Pact.Native.Internal
 
 
 
+
 dbDefs :: NativeModule
 dbDefs =
   let writeArgs = funType tTyString [("table",tableTy),("key",tTyString),("object",rowTy)]
@@ -171,7 +172,7 @@ read' g0 i as@(table@TTable {}:TLitString key:rest) = do
 read' _ i as = argsError i as
 
 gasPostRead :: Readable r =>FunApp -> Gas -> r -> Eval e Gas
-gasPostRead i g0 row = (g0 <>) <$> gasSpecial i (GPostRead $ readable row)
+gasPostRead i g0 row = (g0 <>) <$> computeGas (Right i) (GPostRead $ readable row)
 
 gasPostRead' :: Readable r => FunApp -> Gas -> r -> Eval e a -> Eval e (Gas,a)
 gasPostRead' i g0 row action = gasPostRead i g0 row >>= \g -> (g,) <$> action
@@ -207,7 +208,7 @@ select i as = argsError' i as
 select' :: FunApp -> [Term Ref] -> Maybe [(Info,ColumnId)] ->
            Term Ref -> Term Name -> Eval e (Gas,Term Name)
 select' i _ cols' app@TApp{} tbl@TTable{} = do
-    g0 <- gasSpecial i $ GSelect cols' app tbl
+    g0 <- computeGas (Right i) $ GSelect cols' app tbl
     guardTable i tbl
     let fi = _faInfo i
         tblTy = _tTableType tbl

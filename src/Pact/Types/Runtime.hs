@@ -518,7 +518,7 @@ runEval' s env act =
 call :: StackFrame -> Eval e (Gas,a) -> Eval e a
 call s act = do
   evalCallStack %= (s:)
-  (_,r) <- act
+  (gas,r) <- act
   evalCallStack %= \st -> case st of (_:as) -> as; [] -> []
   return r
 {-# INLINE call #-}
