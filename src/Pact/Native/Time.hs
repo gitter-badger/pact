@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -91,24 +92,25 @@ parseTime' i [TLitString fmt,TLitString s] =
 parseTime' i as = argsError i as
 
 formatTime' :: RNativeFun e
-formatTime' _ [TLitString fmt,TLiteral (LTime t) _] =
+formatTime' _i [TLitString fmt,TLiteral (LTime t) _] =
   return $ toTerm $ pack $ formatTime defaultTimeLocale (unpack fmt) t
 formatTime' i as = argsError i as
 
 
 addTime :: RNativeFun e
-addTime _ [TLiteral (LTime t) _,TLiteral (LDecimal r) _] = return $ doTimeAdd t r
-addTime _ [TLiteral (LTime t) _,TLitInteger n] = return $ doTimeAdd t (fromIntegral n)
+addTime _i [TLiteral (LTime t) _,TLiteral (LDecimal r) _] = return $ doTimeAdd t r
+addTime _i [TLiteral (LTime t) _,TLitInteger n] = return $ doTimeAdd t (fromIntegral n)
 addTime i as = argsError i as
 
 doTimeAdd :: UTCTime -> Decimal -> Term Name
 doTimeAdd t r = toTerm (t .+^ fromSeconds r)
 
 diffTime :: RNativeFun e
-diffTime _ [TLiteral (LTime t1) _,TLiteral (LTime t2) _] = return $ toTerm (toSeconds (t1 .-. t2) :: Decimal)
+diffTime _i [TLiteral (LTime t1) _,TLiteral (LTime t2) _] =
+  return $ toTerm (toSeconds (t1 .-. t2) :: Decimal)
 diffTime i as = argsError i as
 
 timeMult :: Decimal -> RNativeFun e
-timeMult m _ [TLitInteger n] = return $ toTerm (fromIntegral n * m)
-timeMult m _ [TLiteral (LDecimal d) _] = return $ toTerm (d * m)
-timeMult _ i as = argsError i as
+timeMult m _i [TLitInteger n] = return $ toTerm (fromIntegral n * m)
+timeMult m _i [TLiteral (LDecimal d) _] = return $ toTerm (d * m)
+timeMult _  i as = argsError i as
