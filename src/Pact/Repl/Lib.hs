@@ -122,7 +122,14 @@ replDefs = ("Repl",
      ,defZRNative "typecheck" tc (funType tTyString [("module",tTyString)] <>
                                  funType tTyString [("module",tTyString),("debug",tTyBool)])
        "Typecheck MODULE, optionally enabling DEBUG output."
-
+     ,defZRNative "env-gaslimit" setGasLimit (funType tTyString [("limit",tTyInteger)])
+       "Set environment gas limit to LIMIT"
+     ,defZRNative "env-gas" envGas (funType tTyInteger [] <> funType tTyString [("gas",tTyInteger)])
+       "Query gas state, or set it to GAS"
+     ,defZRNative "env-gasprice" setGasPrice (funType tTyString [("price",tTyDecimal)])
+       "Set environment gas price to PRICE"
+     ,defZRNative "env-gasrate" setGasRate (funType tTyString [("rate",tTyInteger)])
+       "Update gas model to charge constant RATE"
 #if !defined(ghcjs_HOST_OS)
      ,defZRNative "verify" verify (funType tTyString [("module",tTyString)]) "Verify MODULE, checking that all properties hold."
 #endif
@@ -376,3 +383,29 @@ envHash i [TLitString s] = case fromText' s of
     setenv eeHash h
     return $ tStr $ "Set tx hash to " <> s
 envHash i as = argsError i as
+
+setGasLimit :: RNativeFun LibState
+setGasLimit _ [TLitInteger l] = do
+  setenv (eeGasEnv . geGasLimit) (fromIntegral l)
+  return $ tStr $ "Set gas limit to " <> tShow l
+setGasLimit i as = argsError i as
+
+envGas :: RNativeFun LibState
+envGas _ [] = use evalGas >>= \g -> return (tLit $ LInteger $ fromIntegral g)
+envGas _ [TLitInteger g] = do
+  evalGas .= fromIntegral g
+  return $ tStr $ "Set gas to " <> tShow g
+envGas i as = argsError i as
+
+setGasPrice :: RNativeFun LibState
+setGasPrice _ [TLiteral (LDecimal d) _] = do
+  setenv (eeGasEnv . geGasPrice) (GasPrice d)
+  return $ tStr $ "Set gas price to " <> tShow d
+setGasPrice i as = argsError i as
+
+setGasRate :: RNativeFun LibState
+setGasRate _ [TLitInteger r] = do
+    setenv (eeGasEnv . geGasModel) (constGasModel $ fromIntegral r)
+    return $ tStr $ "Set gas rate to " <> tShow r
+
+setGasRate i as = argsError i as

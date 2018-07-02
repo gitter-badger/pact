@@ -55,6 +55,12 @@ import Pact.Repl.Types
 import Pact.Types.Hash
 import Pact.Gas
 
+-- | for use in GHCI
+repl :: IO (Either () (Term Name))
+repl = repl' Interactive
+
+repl' :: ReplMode -> IO (Either () (Term Name))
+repl' m = initReplState m >>= \s -> runPipedRepl' (m == Interactive) s stdin
 
 isPactFile :: String -> Bool
 isPactFile fp = endsWith fp ".pact"
@@ -63,8 +69,11 @@ endsWith :: Eq a => [a] -> [a] -> Bool
 endsWith v s = s == reverse (take (length s) (reverse v))
 
 runPipedRepl :: ReplState -> Handle -> IO (Either () (Term Name))
-runPipedRepl s@ReplState{..} h =
-    evalStateT (useReplLib >> pipeLoop h Nothing) s
+runPipedRepl = runPipedRepl' False
+
+runPipedRepl' :: Bool -> ReplState -> Handle -> IO (Either () (Term Name))
+runPipedRepl' p s@ReplState{..} h =
+    evalStateT (useReplLib >> pipeLoop p h Nothing) s
 
 initReplState :: MonadIO m => ReplMode -> m ReplState
 initReplState m = liftIO initPureEvalEnv >>= \e -> return (ReplState e def m def def)
@@ -85,8 +94,9 @@ utf8BytesLength :: String -> Int
 utf8BytesLength = length . toUTF8Bytes
 
 -- | Main loop for non-interactive (piped) input
-pipeLoop :: Handle -> Maybe (Term Name) -> Repl (Either () (Term Name))
-pipeLoop h lastResult = do
+pipeLoop :: Bool -> Handle -> Maybe (Term Name) -> Repl (Either () (Term Name))
+pipeLoop prompt h lastResult = do
+  when prompt $ outStr HOut "pact> "
   isEof <- liftIO (hIsEOF h)
   let retVal = maybe rSuccess (return.Right) lastResult
   if isEof then retVal else do
@@ -99,7 +109,7 @@ pipeLoop h lastResult = do
       Left _ -> do
         outStrLn HErr "Aborting execution"
         return r
-      Right t -> pipeLoop h (Just t)
+      Right t -> pipeLoop prompt h (Just t)
 
 getDelta :: Repl Delta
 getDelta = do

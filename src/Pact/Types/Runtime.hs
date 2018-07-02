@@ -59,7 +59,7 @@ module Pact.Types.Runtime
    module Pact.Types.Lang,
    module Pact.Types.Util,
    GasEnv(..),geGasLimit,geGasPrice,geGasModel,
-   ReadValue(..),GasModel(..),GasArgs(..)
+   ReadValue(..),GasModel(..),GasArgs(..),GasLimit(..)
    ) where
 
 
@@ -110,13 +110,17 @@ instance Show StackFrame where
       Just (_,as) -> "(" ++ unpack n ++ concatMap (\a -> " " ++ unpack (asString a)) as ++ ")"
 makeLenses ''StackFrame
 
+newtype GasLimit = GasLimit Word64
+  deriving (Eq,Ord,Num,Real,Integral,Enum)
+instance Show GasLimit where show (GasLimit g) = show g
+
 data PactErrorType
   = EvalError
   | ArgsError
   | DbError
   | TxFailure
   | SyntaxError
-  | GasError Gas Gas
+  | GasError Gas GasLimit
 
 data PactError = PactError
   { peType :: PactErrorType
@@ -135,7 +139,7 @@ instance Show PactError where
               DbError -> Just "Database exception"
               SyntaxError -> Just "Syntax error"
               GasError charged limit ->
-                Just $ "Out of gas (charged: " ++ show charged ++ ", limit: " ++ show limit ++ ")"
+                Just $ "GasError (charged: " ++ show charged ++ ", limit: " ++ show limit ++ ")"
 
 
 
@@ -462,9 +466,10 @@ data GasArgs
 
 
 newtype GasModel = GasModel { runGasModel :: Text -> GasArgs -> Gas }
+instance Show GasModel where show _ = "[GasModel]"
 
 data GasEnv = GasEnv
-  { _geGasLimit :: Gas
+  { _geGasLimit :: GasLimit
   , _geGasPrice :: GasPrice
   , _geGasModel :: GasModel
   }
