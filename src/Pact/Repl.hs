@@ -41,7 +41,7 @@ import GHC.Word (Word8)
 import System.IO
 import Text.Trifecta.Delta
 import Control.Concurrent
-import Data.Monoid hiding ((<>))
+import Data.Monoid
 import System.FilePath
 
 import Pact.Compile
@@ -53,6 +53,7 @@ import Pact.Repl.Lib
 import Pact.Types.Logger
 import Pact.Repl.Types
 import Pact.Types.Hash
+import Pact.Gas
 
 
 isPactFile :: String -> Bool
@@ -70,8 +71,9 @@ initReplState m = liftIO initPureEvalEnv >>= \e -> return (ReplState e def m def
 
 initPureEvalEnv :: IO (EvalEnv LibState)
 initPureEvalEnv = do
-  ls <- initLibState neverLog
-  set eeTxId (Just 0) <$> initEvalEnv ls repldb initialHash
+  mv <- initLibState neverLog >>= newMVar
+  return $ EvalEnv (RefStore nativeDefs mempty) def Null (Just 0) def def mv repldb def initialHash freeGasEnv
+
 
 errToUnit :: Functor f => f (Either e a) -> f (Either () a)
 errToUnit a = either (const (Left ())) Right <$> a
@@ -147,7 +149,7 @@ pureEval ei e = do
   (ReplState evalE evalS _ _ _) <- get
   er <- try (liftIO $ runEval' evalS evalE e)
   let (r,es) = case er of
-                 Left (SomeException ex) -> (Left (EvalError def def (pack $ show ex)),evalS)
+                 Left (SomeException ex) -> (Left (PactError EvalError def def (pack $ show ex)),evalS)
                  Right v -> v
   mode <- use rMode
   case r of

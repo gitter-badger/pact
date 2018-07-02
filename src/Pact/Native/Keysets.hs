@@ -15,6 +15,7 @@ import Control.Lens
 import Control.Monad
 import Data.Default
 import Prelude
+import Data.Semigroup ((<>))
 
 import Pact.Eval
 import Pact.Native.Internal

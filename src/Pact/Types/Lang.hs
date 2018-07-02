@@ -81,8 +81,8 @@ module Pact.Types.Lang
    pattern TLitString,pattern TLitInteger,pattern TLitBool,
    tLit,tStr,termEq,abbrev,
    Text,pack,unpack,
-   mDocs,mMetas
-    ,Gas(..)
+   mDocs,mMetas,
+   Gas(..),GasPrice(..)
    ) where
 
 
@@ -117,12 +117,12 @@ import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import Text.PrettyPrint.ANSI.Leijen hiding ((<>),(<$>))
 import Data.Monoid
 import Data.Semigroup (Semigroup)
-import qualified Data.Semigroup as Semigroup
 import Control.DeepSeq
 import Data.Maybe
 import qualified Data.HashSet as HS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as M
+import Data.Int (Int64)
 
 import Data.Serialize (Serialize)
 
@@ -624,18 +624,19 @@ instance Show Ref where
     show (Direct t) = abbrev t
     show (Ref t) = abbrev t
 
-
-data Gas = GFree | GValue Decimal
-
+-- | Gas compute cost unit.
+newtype Gas = Gas Int64
+  deriving (Eq,Ord,Num,Real,Integral,Enum)
+instance Show Gas where show (Gas g) = show g
 instance Monoid Gas where
-  mempty = GFree
-  a `mappend` b = case (a,b) of
-    (GFree,GFree) -> GFree
-    (GFree,_) -> b
-    (_,GFree) -> a
-    (GValue x,GValue y) -> GValue $ x + y
-instance Semigroup Gas where
-  a <> b = a `mappend` b
+  mempty = 0
+  (Gas a) `mappend` (Gas b) = Gas $ a + b
+
+
+-- | Price per 'Gas' unit.
+newtype GasPrice = GasPrice Decimal
+  deriving (Eq,Ord,Num,Real,Fractional,RealFrac,NFData,Enum)
+instance Show GasPrice where show (GasPrice p) = show p
 
 data NativeDFun = NativeDFun {
       _nativeName :: NativeDefName,

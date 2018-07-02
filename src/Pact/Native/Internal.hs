@@ -25,7 +25,8 @@ module Pact.Native.Internal
   ,module Pact.Types.Native
   ,tTyInteger,tTyDecimal,tTyTime,tTyBool,tTyString,tTyValue,tTyKeySet,tTyObject
   ,colsToList
-  ,module Pact.Types.Gas
+  ,module Pact.Gas
+  ,(<>)
   ) where
 
 import Control.Monad
@@ -39,10 +40,11 @@ import Control.Arrow
 import qualified Data.Aeson.Lens as A
 import Bound
 import qualified Data.HashMap.Strict as HM
+import Data.Semigroup ((<>))
 
 import Pact.Types.Runtime
 import Pact.Types.Native
-import Pact.Types.Gas
+import Pact.Gas
 
 success :: Functor m => Text -> m a -> m (Term Name)
 success = fmap . const . toTerm
@@ -76,8 +78,9 @@ bindReduce ps bd bi lkpFun = do
                                 Just v -> return v
             t -> evalError bi $ "Invalid column identifier in binding: " ++ show t
   let bd'' = instantiate (resolveArg bi (map snd vs)) bd
+  -- | NB stack frame here just documents scope, but does not incur gas
   call (StackFrame (pack $ "(bind: " ++ show (map (second abbrev) vs) ++ ")") bi Nothing) $!
-    ((GFree,) <$> reduceBody bd'') -- TODO bind charge
+    ((0,) <$> reduceBody bd'')
 
 -- | Specify a 'NativeFun'
 defNative :: NativeDefName -> NativeFun e -> FunTypes (Term Name) -> Text -> NativeDef
@@ -86,12 +89,12 @@ defNative n fun ftype docs = (n, TNative n (NativeDFun n (unsafeCoerce fun)) fty
 -- | Specify a 'GasRNativeFun'
 defGasRNative :: NativeDefName -> GasRNativeFun e -> FunTypes (Term Name) -> Text -> NativeDef
 defGasRNative name fun = defNative name (reduced fun)
-    where reduced f fi as = preGas fi as >>= \(as',g) -> f g fi as'
+    where reduced f fi as = preGas fi as >>= \(g,as') -> f g fi as'
 
 -- | Specify a 'RNativeFun'
 defRNative :: NativeDefName -> RNativeFun e -> FunTypes (Term Name) -> Text -> NativeDef
 defRNative name fun = defNative name (reduced fun)
-    where reduced f fi as = preGas fi as >>= \(as',g) -> (g,) <$> f fi as'
+    where reduced f fi as = preGas fi as >>= \(g,as') -> (g,) <$> f fi as'
 
 foldDefs :: Monad m => [m a] -> m [a]
 foldDefs = foldM (\r d -> d >>= \d' -> return (d':r)) []

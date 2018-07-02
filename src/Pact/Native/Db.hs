@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE TupleSections #-}
@@ -31,11 +32,25 @@ import Data.Aeson (toJSON)
 import Pact.Eval
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import Data.Semigroup ((<>))
 
 import Pact.Types.Runtime
 import Pact.Native.Internal
 
 
+class Readable a where
+  readable :: a -> ReadValue
+
+instance Readable (Columns Persistable) where
+  readable = ReadData
+instance Readable RowKey where
+  readable = ReadKey
+instance Readable TxId where
+  readable = const ReadTxId
+instance Readable (TxLog (Columns Persistable)) where
+  readable = ReadData . _txValue
+instance Readable (TxId, TxLog (Columns Persistable)) where
+  readable = ReadData . _txValue . snd
 
 
 dbDefs :: NativeModule
@@ -172,7 +187,7 @@ read' g0 i as@(table@TTable {}:TLitString key:rest) = do
 read' _ i as = argsError i as
 
 gasPostRead :: Readable r =>FunApp -> Gas -> r -> Eval e Gas
-gasPostRead i g0 row = (g0 <>) <$> computeGas (Right i) (GPostRead $ readable row)
+gasPostRead i g0 row = (g0 +) <$> computeGas (Right i) (GPostRead $ readable row)
 
 gasPostRead' :: Readable r => FunApp -> Gas -> r -> Eval e a -> Eval e (Gas,a)
 gasPostRead' i g0 row action = gasPostRead i g0 row >>= \g -> (g,) <$> action
@@ -233,7 +248,7 @@ select' i as _ _ _ = argsError' i as
 
 withDefaultRead :: NativeFun e
 withDefaultRead fi as@[table',key',defaultRow',b@(TBinding ps bd (BindSchema _) _)] = do
-  (!tkd,!g0) <- preGas fi [table',key',defaultRow']
+  (!g0,!tkd) <- preGas fi [table',key',defaultRow']
   case tkd of
     ([table@TTable {..},TLitString key,TObject defaultRow _ _]) -> do
       guardTable fi table
@@ -246,7 +261,7 @@ withDefaultRead fi as = argsError' fi as
 
 withRead :: NativeFun e
 withRead fi as@[table',key',b@(TBinding ps bd (BindSchema _) _)] = do
-  (!tk,!g0) <- preGas fi [table',key']
+  (!g0,!tk) <- preGas fi [table',key']
   case tk of
     [table@TTable {..},TLitString key] -> do
       guardTable fi table

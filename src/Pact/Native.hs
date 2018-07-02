@@ -18,11 +18,9 @@
 module Pact.Native
     (natives
     ,nativeDefs
-    ,moduleToMap
-    ,initEvalEnv)
+    ,moduleToMap)
     where
 
-import Control.Concurrent hiding (yield)
 import Control.Lens hiding (parts,Fold,contains)
 import Control.Monad
 import Control.Monad.Reader (asks)
@@ -430,13 +428,6 @@ listModules :: RNativeFun e
 listModules _ _ = do
   mods <- view $ eeRefStore.rsModules
   return $ toTermList tTyString $ map asString $ M.keys mods
-
-
-initEvalEnv :: e -> PactDb e -> Hash -> IO (EvalEnv e)
-initEvalEnv e b h = do
-  mv <- newMVar e
-  return $ EvalEnv (RefStore nativeDefs M.empty) def Null def def def mv b def h
-
 
 unsetInfo :: Term a -> Term a
 unsetInfo a = set tInfo def a

@@ -70,7 +70,7 @@ initLibState loggers = do
 type ZNativeFun e = FunApp -> [Term Ref] -> Eval e (Term Name)
 
 zeroGas :: Eval e a -> Eval e (Gas,a)
-zeroGas = fmap (GFree,)
+zeroGas = fmap (0,)
 
 defZNative :: NativeDefName -> ZNativeFun e -> FunTypes (Term Name) -> Text -> NativeDef
 defZNative name fun = defNative name $ \fi as -> zeroGas $ fun fi as

@@ -29,8 +29,8 @@
 --
 
 module Pact.Types.Runtime
- ( PactError(..),
-   evalError,evalError',failTx,argsError,argsError',throwDbError,throwEither,
+ ( PactError(..),PactErrorType(..),
+   evalError,evalError',failTx,argsError,argsError',throwDbError,throwEither,throwErr,
    Persistable(..),ToPersistable(..),
    ColumnId(..),
    RowKey(..),
@@ -46,19 +46,20 @@ module Pact.Types.Runtime
    ModuleData,
    RefStore(..),rsNatives,rsModules,updateRefStore,
    EntityName(..),
-   EvalEnv(..),eeRefStore,eeMsgSigs,eeMsgBody,eeTxId,eeEntity,eePactStep,eePactDbVar,eePactDb,eePurity,eeHash,
+   EvalEnv(..),eeRefStore,eeMsgSigs,eeMsgBody,eeTxId,eeEntity,eePactStep,eePactDbVar,eePactDb,eePurity,eeHash,eeGasEnv,
    Purity(..),PureNoDb,PureSysRead,EnvNoDb(..),EnvSysRead(..),mkNoDbEnv,mkSysReadEnv,
    StackFrame(..),sfName,sfLoc,sfApp,
    PactExec(..),peStepCount,peYield,peExecuted,pePactId,peStep,
    RefState(..),rsLoaded,rsLoadedModules,rsNew,
-   EvalState(..),evalRefs,evalCallStack,evalPactExec,
+   EvalState(..),evalRefs,evalCallStack,evalPactExec,evalGas,
    Eval(..),runEval,runEval',
    call,method,
    readRow,writeRow,keys,txids,createUserTable,getUserTableInfo,beginTx,commitTx,rollbackTx,getTxLog,
    KeyPredBuiltins(..),keyPredBuiltins,
    module Pact.Types.Lang,
    module Pact.Types.Util,
-   (<>)
+   GasEnv(..),geGasLimit,geGasPrice,geGasModel,
+   ReadValue(..),GasModel(..),GasArgs(..)
    ) where
 
 
@@ -90,7 +91,6 @@ import GHC.Generics
 import Data.Decimal
 import Control.Concurrent.MVar
 import Data.Serialize (Serialize)
-import Data.Semigroup
 import Text.Read (readMaybe)
 import Data.Hashable
 
@@ -110,22 +110,33 @@ instance Show StackFrame where
       Just (_,as) -> "(" ++ unpack n ++ concatMap (\a -> " " ++ unpack (asString a)) as ++ ")"
 makeLenses ''StackFrame
 
+data PactErrorType
+  = EvalError
+  | ArgsError
+  | DbError
+  | TxFailure
+  | SyntaxError
+  | GasError Gas Gas
 
-data PactError =
-    EvalError { peInfo :: Info, peCallStack :: [StackFrame], peText :: Text } |
-    ArgsError { peInfo :: Info, peCallStack :: [StackFrame], peText :: Text } |
-    DbError { peInfo :: Info, peCallStack :: [StackFrame], peText :: Text } |
-    TxFailure { peInfo :: Info, peCallStack :: [StackFrame], peText :: Text } |
-    SyntaxError { peInfo :: Info, peCallStack :: [StackFrame], peText :: Text }
+data PactError = PactError
+  { peType :: PactErrorType
+  , peInfo :: Info
+  , peCallStack :: [StackFrame]
+  , peText :: Text }
 
 instance Exception PactError
 
 instance Show PactError where
-    show (EvalError i _ s) = show i ++ ": Failure: " ++ unpack s
-    show (ArgsError i _ s) = show i ++ ": " ++ show s
-    show (TxFailure i _ s) = show i ++ ": Failure: Tx Failed: " ++ unpack s
-    show (DbError i _ s) = show i ++ ": Failure: Database exception: " ++ unpack s
-    show (SyntaxError i _ s) = show i ++ ": Failure: Syntax error: " ++ unpack s
+    show (PactError t i _ s) = show i ++ ": Failure: " ++ maybe "" (++ ": ") msg ++ unpack s
+      where msg = case t of
+              EvalError -> Nothing
+              ArgsError -> Nothing
+              TxFailure -> Just "Tx Failed"
+              DbError -> Just "Database exception"
+              SyntaxError -> Just "Syntax error"
+              GasError charged limit ->
+                Just $ "Out of gas (charged: " ++ show charged ++ ", limit: " ++ show limit ++ ")"
+
 
 
 
@@ -426,10 +437,39 @@ data Purity =
 instance Default Purity where def = PImpure
 
 -- | Marker class for 'PNoDb' environments.
-class PureNoDb e where
+class PureNoDb e
 -- | Marker class for 'PSysRead' environments.
 -- SysRead supports pure operations as well.
-class PureNoDb e => PureSysRead e where
+class PureNoDb e => PureSysRead e
+
+-- | DB Read value for per-row gas costing.
+-- Data is included if variable-size.
+data ReadValue
+  = ReadData (Columns Persistable)
+  | ReadKey RowKey
+  | ReadTxId
+
+
+data GasArgs
+  = GPostRead ReadValue
+  | GSelect (Maybe [(Info,ColumnId)]) (Term Ref) (Term Name)
+  | GUnreduced [Term Ref]
+  | GReduced [Term Name]
+  | GUse ModuleName (Maybe Hash)
+  | GModule Module
+  | GModuleMember Module
+  | GUser
+
+
+newtype GasModel = GasModel { runGasModel :: Text -> GasArgs -> Gas }
+
+data GasEnv = GasEnv
+  { _geGasLimit :: Gas
+  , _geGasPrice :: GasPrice
+  , _geGasModel :: GasModel
+  }
+makeLenses ''GasEnv
+
 
 -- | Interpreter reader environment, parameterized over back-end MVar state type.
 data EvalEnv e = EvalEnv {
@@ -453,6 +493,8 @@ data EvalEnv e = EvalEnv {
     , _eePurity :: Purity
       -- | Transaction hash
     , _eeHash :: Hash
+      -- | Gas Environment
+    , _eeGasEnv :: GasEnv
     } -- deriving (Eq,Show)
 makeLenses ''EvalEnv
 
@@ -485,11 +527,11 @@ data EvalState = EvalState {
     , _evalCallStack :: ![StackFrame]
       -- | Pact execution trace, if any
     , _evalPactExec :: !(Maybe PactExec)
-    }
+      -- | Gas tally
+    , _evalGas :: Gas
+    } deriving (Show)
 makeLenses ''EvalState
-instance Show EvalState where
-    show (EvalState m y _) = "EvalState " ++ show m ++ " " ++ show y
-instance Default EvalState where def = EvalState def def def
+instance Default EvalState where def = EvalState def def def 0
 
 -- | Interpreter monad, parameterized over back-end MVar state type.
 newtype Eval e a =
@@ -510,7 +552,7 @@ runEval' :: EvalState -> EvalEnv e -> Eval e a ->
 runEval' s env act =
   runStateT (catches (Right <$> runReaderT (unEval act) env)
               [Handler (\(e :: PactError) -> return $ Left e)
-              ,Handler (\(e :: SomeException) -> return $ Left . EvalError def def . pack . show $ e)
+              ,Handler (\(e :: SomeException) -> return $ Left . PactError EvalError def def . pack . show $ e)
               ]) s
 
 
@@ -518,7 +560,7 @@ runEval' s env act =
 call :: StackFrame -> Eval e (Gas,a) -> Eval e a
 call s act = do
   evalCallStack %= (s:)
-  (gas,r) <- act
+  (_gas,r) <- act -- TODO opportunity for per-call gas logging here
   evalCallStack %= \st -> case st of (_:as) -> as; [] -> []
   return r
 {-# INLINE call #-}
@@ -593,8 +635,8 @@ throwArgsError FunApp {..} args s = throwErr ArgsError _faInfo $ pack $
   unpack s ++ ", received [" ++ intercalate "," (map abbrev args) ++ "] for " ++
             showFunTypes _faTypes
 
-throwErr :: (Info -> [StackFrame] -> Text -> PactError) -> Info -> Text -> Eval e a
-throwErr ctor i err = get >>= \s -> throwM (ctor i (_evalCallStack s) err)
+throwErr :: PactErrorType -> Info -> Text -> Eval e a
+throwErr ctor i err = get >>= \s -> throwM (PactError ctor i (_evalCallStack s) err)
 
 evalError :: Info -> String -> Eval e a
 evalError i = throwErr EvalError i . pack
@@ -606,7 +648,7 @@ failTx :: Info -> String -> Eval e a
 failTx i = throwErr TxFailure i . pack
 
 throwDbError :: MonadThrow m => String -> m a
-throwDbError s = throwM $ DbError def def (pack s)
+throwDbError s = throwM $ PactError DbError def def (pack s)
 
 -- | Throw an error coming from an Except/Either context.
 throwEither :: (MonadThrow m,Exception e) => Either e a -> m a
@@ -631,7 +673,7 @@ instance PureSysRead (EnvSysRead e)
 instance PureNoDb (EnvSysRead e)
 
 diePure :: Method e a
-diePure _ = throwM $ EvalError def def "Illegal database access in pure context"
+diePure _ = throwM $ PactError EvalError def def "Illegal database access in pure context"
 
 -- | Construct a delegate pure eval environment.
 mkPureEnv :: (EvalEnv e -> f) -> Purity ->
@@ -662,6 +704,8 @@ mkPureEnv holder purity readRowImpl env@EvalEnv{..} = do
     }
     purity
     _eeHash
+    _eeGasEnv
+
 
 mkNoDbEnv :: EvalEnv e -> Eval e (EvalEnv (EnvNoDb e))
 mkNoDbEnv = mkPureEnv EnvNoDb PNoDb (\_ _ -> diePure)

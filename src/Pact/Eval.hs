@@ -54,7 +54,7 @@ import Unsafe.Coerce
 import Data.Aeson (Value)
 
 import Pact.Types.Runtime
-import Pact.Types.Gas
+import Pact.Gas
 
 
 evalBeginTx :: Info -> Eval e ()
@@ -119,16 +119,15 @@ apply f as i as' = reduce (TApp f (as ++ map liftTerm as') i)
 apply' :: Term Ref -> [Term Name] -> Eval e (Term Name)
 apply' app as' = apply (_tAppFun app) (_tAppArgs app) (_tInfo app) as'
 
-
-
 -- | Precompute gas on unreduced args returning reduced values.
-preGas :: FunApp -> [Term Ref] -> Eval e ([Term Name],Gas)
-preGas i as = mapM reduce as >>= \as' -> (as',) <$> gas i as' -- TODO let backend optionally reduce
+preGas :: FunApp -> [Term Ref] -> Eval e (Gas,[Term Name])
+preGas i as =
+  computeGas (Right i) (GUnreduced as) >>= \g -> (g,) <$> mapM reduce as
 
 topLevelCall
   :: Info -> Text -> GasArgs -> (Gas -> Eval e (Gas, a)) -> Eval e a
 topLevelCall i name gasArgs action = call (StackFrame name i Nothing) $
-  computeGas (Left name) gasArgs >>= action
+  computeGas (Left (i,name)) gasArgs >>= action
 
 -- | Evaluate top-level term.
 eval ::  Term Name ->  Eval e (Term Name)
@@ -194,8 +193,8 @@ loadModule m bod1 mi g0 = do
               case dnm of
                 Nothing -> return (g, rs)
                 Just dn -> do
-                  g' <- computeGas (Left dn) (GModuleMember m)
-                  return (g <> g',(dn,t):rs)
+                  g' <- computeGas (Left (_tInfo t,dn)) (GModuleMember m)
+                  return (g + g',(dn,t):rs)
         second HM.fromList <$> foldM doDef (g0,[]) bd
       t -> evalError (_tInfo t) "Malformed module"
   cs :: [SCC (Term (Either Text Ref), Text, [Text])] <-
@@ -317,15 +316,16 @@ reduceApp :: Term Ref -> [Term Ref] -> Info ->  Eval e (Term Name)
 reduceApp (TVar (Direct t) _) as ai = reduceDirect t as ai
 reduceApp (TVar (Ref r) _) as ai = reduceApp r as ai
 reduceApp TDef {..} as ai = do
+  g <- computeGas (Left (_tInfo, asString _tDefName)) GUser
   as' <- mapM reduce as
   ft' <- traverse reduce _tFunType
   typecheck (zip (_ftArgs ft') as')
   let bod' = instantiate (resolveArg ai (map mkDirect as')) _tDefBody
       fa = FunApp _tInfo _tDefName (Just _tModule) _tDefType (funTypes ft') (_mDocs <$> _tMeta)
-  appCall fa ai as $
+  appCall fa ai as $ fmap (g,) $ do
     case _tDefType of
-      Defun -> (GFree,) <$> reduceBody bod' -- TODO app charge
-      Defpact -> (GFree,) <$> applyPact bod' -- TODO pact charge
+      Defun -> reduceBody bod'
+      Defpact -> applyPact bod'
 reduceApp (TLitString errMsg) _ i = evalError i $ unpack errMsg
 reduceApp r _ ai = evalError ai $ "Expected def: " ++ show r
 
